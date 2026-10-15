@@ -24,7 +24,9 @@ async function initDb() {
   `);
 }
 
-initDb().catch((err) => console.error("DB init failed", err));
+initDb()
+  .then(() => console.log("DB ready, tables ensured"))
+  .catch((err) => console.error("DB init failed", err));
 
 const VERIFIER_TOKEN = process.env.QBO_WEBHOOK_VERIFIER;
 
