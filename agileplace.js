@@ -73,7 +73,7 @@ async function resolveCustomFields(byLabel) {
 async function createCard({ title, header, customFields = {} }) {
   const destination = LANE_ID ? { laneId: LANE_ID } : { boardId: BOARD_ID };
   const body = { destination, title };
-  if (header) body.customId = { value: header };
+  if (header) body.customId = header; // must be a plain string (docs example shows an object, API rejects it)
   const resolved = await resolveCustomFields(customFields);
   if (resolved.length) body.customFields = resolved;
 
