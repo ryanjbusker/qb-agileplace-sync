@@ -1,7 +1,8 @@
 const express = require("express");
 const crypto = require("crypto");
-const { initDb } = require("./db");
+const { pool, initDb } = require("./db");
 const { router: qboRouter, qboGet } = require("./qbo");
+const { createCard } = require("./agileplace");
 
 const app = express();
 
@@ -40,7 +41,45 @@ async function handleEvent(realmId, entity) {
     project: est.ProjectRef || null,
   });
 
-  // TODO: create the card in AgilePlace, then record it in project_map
+  await syncEstimateCard(realmId, est);
+}
+
+// Create one AgilePlace card per estimate. A per-estimate advisory lock makes
+// duplicate or simultaneous webhook deliveries wait, then see the mapping.
+async function syncEstimateCard(realmId, est) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [
+      `estimate:${realmId}:${est.Id}`,
+    ]);
+
+    const { rows } = await client.query(
+      "SELECT agileplace_id FROM project_map WHERE realm_id = $1 AND qbo_id = $2",
+      [realmId, est.Id]
+    );
+    if (rows.length) {
+      await client.query("COMMIT");
+      console.log(`Estimate ${est.Id} already has card ${rows[0].agileplace_id}, skipping`);
+      return;
+    }
+
+    const customer = est.CustomerRef?.name || "Unknown customer";
+    const title = `${customer} - Estimate ${est.DocNumber || est.Id}`;
+    const cardId = await createCard({ title });
+
+    await client.query(
+      "INSERT INTO project_map (qbo_id, realm_id, agileplace_id) VALUES ($1, $2, $3)",
+      [est.Id, realmId, cardId]
+    );
+    await client.query("COMMIT");
+    console.log(`Created AgilePlace card ${cardId} for estimate ${est.Id}: "${title}"`);
+  } catch (err) {
+    await client.query("ROLLBACK").catch(() => {});
+    throw err;
+  } finally {
+    client.release();
+  }
 }
 
 // Turn a webhook body into a flat list of { realmId, name, id, operation }.
