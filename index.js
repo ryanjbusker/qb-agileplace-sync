@@ -27,7 +27,15 @@ async function handleEvent(realmId, entity) {
 
   if (entity.name.toLowerCase() !== "estimate" || entity.operation !== "create") return;
 
-  const data = await qboGet(realmId, `estimate/${entity.id}`);
+  // By default QuickBooks only returns the first three text custom fields;
+  // enhancedAllCustomFields asks for all of them but isn't available on every plan.
+  let data;
+  try {
+    data = await qboGet(realmId, `estimate/${entity.id}?include=enhancedAllCustomFields`);
+  } catch (err) {
+    console.warn("Fetch with all custom fields failed, retrying without:", err.message);
+    data = await qboGet(realmId, `estimate/${entity.id}`);
+  }
   const est = data.Estimate;
 
   // Log just the key fields so you can see what is available to map
@@ -39,9 +47,18 @@ async function handleEvent(realmId, entity) {
     total: est.TotalAmt,
     txnDate: est.TxnDate,
     project: est.ProjectRef || null,
+    customFields: (est.CustomField || []).map((f) => ({ name: f.Name, value: f.StringValue })),
   });
 
   await syncEstimateCard(realmId, est);
+}
+
+// Value of a QuickBooks custom field by its label (case-insensitive), or null
+function customFieldValue(est, name) {
+  const field = (est.CustomField || []).find(
+    (f) => String(f.Name || "").trim().toLowerCase() === name.toLowerCase()
+  );
+  return field?.StringValue?.trim() || null;
 }
 
 // Create one AgilePlace card per estimate. A per-estimate advisory lock makes
@@ -65,7 +82,10 @@ async function syncEstimateCard(realmId, est) {
     }
 
     const customer = est.CustomerRef?.name || "Unknown customer";
-    const title = `${customer} - Estimate ${est.DocNumber || est.Id}`;
+    const jobName = customFieldValue(est, "Job Name");
+    const title = [customer, jobName, `Estimate ${est.DocNumber || est.Id}`]
+      .filter(Boolean)
+      .join(" - ");
     const cardId = await createCard({ title });
 
     await client.query(
