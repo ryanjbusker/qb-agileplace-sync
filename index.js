@@ -1,28 +1,9 @@
 const express = require("express");
 const crypto = require("crypto");
+const { initDb } = require("./db");
+const { router: qboRouter, qboGet } = require("./qbo");
+
 const app = express();
-
-const { Pool } = require("pg");
-const pool = new Pool({ connectionString: process.env.DATABASE_URL });
-
-async function initDb() {
-  await pool.query(`
-    CREATE TABLE IF NOT EXISTS qbo_tokens (
-      realm_id TEXT PRIMARY KEY,
-      refresh_token TEXT NOT NULL,
-      access_token TEXT,
-      expires_at TIMESTAMPTZ,
-      updated_at TIMESTAMPTZ DEFAULT now()
-    );
-    CREATE TABLE IF NOT EXISTS project_map (
-      qbo_id TEXT NOT NULL,
-      realm_id TEXT NOT NULL,
-      agileplace_id TEXT NOT NULL,
-      created_at TIMESTAMPTZ DEFAULT now(),
-      PRIMARY KEY (realm_id, qbo_id)
-    );
-  `);
-}
 
 initDb()
   .then(() => console.log("DB ready, tables ensured"))
@@ -32,6 +13,32 @@ const VERIFIER_TOKEN = process.env.QBO_WEBHOOK_VERIFIER;
 
 // Health check so you can confirm the service is up in a browser
 app.get("/", (req, res) => res.send("OK"));
+
+// OAuth routes: /auth/connect and /auth/callback
+app.use(qboRouter);
+
+// Handle one change event from QuickBooks
+async function handleEvent(realmId, entity) {
+  console.log("QBO event:", realmId, entity.name, entity.id, entity.operation);
+
+  if (entity.name !== "Estimate" || entity.operation !== "Create") return;
+
+  const data = await qboGet(realmId, `estimate/${entity.id}`);
+  const est = data.Estimate;
+
+  // Log just the key fields so you can see what is available to map
+  console.log("Estimate fetched:", {
+    id: est.Id,
+    docNumber: est.DocNumber,
+    customer: est.CustomerRef,
+    status: est.TxnStatus,
+    total: est.TotalAmt,
+    txnDate: est.TxnDate,
+    project: est.ProjectRef || null,
+  });
+
+  // TODO: create the card in AgilePlace, then record it in project_map
+}
 
 app.post("/webhooks/quickbooks", express.raw({ type: "*/*" }), (req, res) => {
   const signature = req.get("intuit-signature") || "";
@@ -48,11 +55,19 @@ app.post("/webhooks/quickbooks", express.raw({ type: "*/*" }), (req, res) => {
 
   res.sendStatus(200); // acknowledge fast
 
-  const payload = JSON.parse(req.body.toString());
+  let payload;
+  try {
+    payload = JSON.parse(req.body.toString());
+  } catch (err) {
+    console.error("Invalid JSON body", err);
+    return;
+  }
+
   for (const n of payload.eventNotifications || []) {
     for (const e of n.dataChangeEvent?.entities || []) {
-      console.log("QBO event:", n.realmId, e.name, e.id, e.operation);
-      // TODO: fetch project from QBO, create card in AgilePlace
+      handleEvent(n.realmId, e).catch((err) =>
+        console.error("Error handling event:", err.message)
+      );
     }
   }
 });
