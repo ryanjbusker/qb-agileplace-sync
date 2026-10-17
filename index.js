@@ -81,11 +81,11 @@ async function syncEstimateCard(realmId, est) {
       return;
     }
 
+    // Title is the Job Name; fall back to customer + estimate # if it's blank
     const customer = est.CustomerRef?.name || "Unknown customer";
-    const jobName = customFieldValue(est, "Job Name");
-    const title = [customer, jobName, `Estimate ${est.DocNumber || est.Id}`]
-      .filter(Boolean)
-      .join(" - ");
+    const title =
+      customFieldValue(est, "Job Name") ||
+      `${customer} - Estimate ${est.DocNumber || est.Id}`;
     const cardId = await createCard({ title });
 
     await client.query(
