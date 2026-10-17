@@ -81,19 +81,25 @@ async function syncEstimateCard(realmId, est) {
       return;
     }
 
-    // Title is the Job Name; fall back to customer + estimate # if it's blank
-    const customer = est.CustomerRef?.name || "Unknown customer";
-    const title =
-      customFieldValue(est, "Job Name") ||
-      `${customer} - Estimate ${est.DocNumber || est.Id}`;
-    const cardId = await createCard({ title });
+    // Header: Job Name. Title: customer. Project Revenue: estimate total.
+    const header = customFieldValue(est, "Job Name");
+    const title = est.CustomerRef?.name || `Estimate ${est.DocNumber || est.Id}`;
+    const cardId = await createCard({
+      title,
+      header,
+      customFields: { "Project Revenue": est.TotalAmt },
+    });
 
     await client.query(
       "INSERT INTO project_map (qbo_id, realm_id, agileplace_id) VALUES ($1, $2, $3)",
       [est.Id, realmId, cardId]
     );
     await client.query("COMMIT");
-    console.log(`Created AgilePlace card ${cardId} for estimate ${est.Id}: "${title}"`);
+    console.log(`Created AgilePlace card ${cardId} for estimate ${est.Id}:`, {
+      header,
+      title,
+      projectRevenue: est.TotalAmt,
+    });
   } catch (err) {
     await client.query("ROLLBACK").catch(() => {});
     throw err;
